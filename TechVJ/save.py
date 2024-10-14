@@ -6,7 +6,7 @@ import asyncio
 import pyrogram
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait, UserIsBlocked, InputUserDeactivated, UserAlreadyParticipant, InviteHashExpired, UsernameNotOccupied
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message 
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 import time
 import os
 import threading
@@ -83,16 +83,27 @@ async def send_help(client: Client, message: Message):
 
 @Client.on_message(filters.text & filters.private)
 async def save(client: Client, message: Message):
+    isComment = False
+    if message.from_user.id == client.me.id:  # 确保不是自己的消息
+        return
     if "https://t.me/" in message.text:
         datas = message.text.split("/")
-        temp = datas[-1].replace("?single","").split("-")
+        comment_id = None
+        if "&comment=" in message.text:
+            isComment = True
+            comment_id = int(datas[-1].replace("comment=", "").split("&")[-1])  # 评论 ID
+
+        temp = datas[-1].replace("?single", "").split("&")[0].split("-")
         fromID = int(temp[0].strip())
         try:
             toID = int(temp[1].strip())
         except:
             toID = fromID
-        for msgid in range(fromID, toID+1):
-            # private
+
+        media_group = None;
+
+        for msgid in range(fromID, toID + 1):
+            # private chat
             if "https://t.me/c/" in message.text:
                 user_data = database.find_one({'chat_id': message.chat.id})
                 if not get(user_data, 'logged_in', False) or user_data['session'] is None:
@@ -103,7 +114,7 @@ async def save(client: Client, message: Message):
                 chatid = int("-100" + datas[4])
                 await handle_private(client, acc, message, chatid, msgid)
     
-            # bot
+            # bot chat
             elif "https://t.me/b/" in message.text:
                 user_data = database.find_one({"chat_id": message.chat.id})
                 if not get(user_data, 'logged_in', False) or user_data['session'] is None:
@@ -116,32 +127,38 @@ async def save(client: Client, message: Message):
                     await handle_private(client, acc, message, username, msgid)
                 except Exception as e:
                     await client.send_message(message.chat.id, f"Error: {e}", reply_to_message_id=message.id)
-            
-	        # public
+
+            # public chat
             else:
                 username = datas[3]
 
                 try:
                     msg = await client.get_messages(username, msgid)
+                    if isComment:
+                        print(f"copied to comment {username} {comment_id}")
+                        # comment_message = await client.get_discussion_message(username, comment_id)
                 except UsernameNotOccupied: 
                     await client.send_message(message.chat.id, "The username is not occupied by anyone", reply_to_message_id=message.id)
                     return
-                try:
-                    await client.copy_message(message.chat.id, msg.chat.id, msg.id, reply_to_message_id=message.id)
-                except:
-                    try:    
-                        user_data = database.find_one({"chat_id": message.chat.id})
-                        if not get(user_data, 'logged_in', False) or user_data['session'] is None:
-                            await client.send_message(message.chat.id, strings['need_login'])
-                            return
-                        acc = Client("saverestricted", session_string=user_data['session'], api_hash=API_HASH, api_id=API_ID)
-                        await acc.connect()
-                        await handle_private(client, acc, message, username, msgid)
-                        
+
+                # Check if this is part of a media group
+                if msg.media_group_id:
+                    if msg.media_group_id != media_group:
+                        media_group = msg.media_group_id
+                        await client.copy_media_group(
+                            message.chat.id,
+                            msg.chat.id,
+                            msg.id
+                        )
+  
+                else:
+                    # If not part of a media group, just forward the message
+                    try:
+                        await client.copy_message(message.chat.id, msg.chat.id, msg.id)
                     except Exception as e:
                         await client.send_message(message.chat.id, f"Error: {e}", reply_to_message_id=message.id)
 
-            # wait time
+            # Wait before processing the next message
             await asyncio.sleep(3)
 
 
